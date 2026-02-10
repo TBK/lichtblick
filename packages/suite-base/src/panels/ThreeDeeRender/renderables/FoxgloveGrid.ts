@@ -74,6 +74,14 @@ const COLOR_MAP_TO_GLSL: {
 } = {
   COLOR_MAP_TURBO: 0,
   COLOR_MAP_RAINBOW: 1,
+  COLOR_MAP_JET: 2,
+  COLOR_MAP_GRAYSCALE: 3,
+  COLOR_MAP_INVERSEGRAYSCALE: 4,
+  COLOR_MAP_WARM: 5,
+  COLOR_MAP_COLD: 6,
+  COLOR_MAP_BIOMES: 7,
+  COLOR_MAP_QUANTIZED: 8,
+  COLOR_MAP_HUE: 9,
 };
 
 const DEFAULT_SETTINGS: LayerSettingsFoxgloveGrid = {
@@ -821,6 +829,65 @@ function createMaterial(texture: THREE.DataTexture, topic: string): GridShaderMa
         return sRGBToLinear(colorOut);
       }
 
+      // Multi-stop colormap helpers
+      vec3 multiStop5(float t, vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec3 c4) {
+        float s = t * 4.0;
+        if(s < 1.0) return sRGBToLinear(mix(c0, c1, s));
+        if(s < 2.0) return sRGBToLinear(mix(c1, c2, s - 1.0));
+        if(s < 3.0) return sRGBToLinear(mix(c2, c3, s - 2.0));
+        return sRGBToLinear(mix(c3, c4, s - 3.0));
+      }
+      vec3 multiStop6(float t, vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec3 c4, vec3 c5) {
+        float s = t * 5.0;
+        if(s < 1.0) return sRGBToLinear(mix(c0, c1, s));
+        if(s < 2.0) return sRGBToLinear(mix(c1, c2, s - 1.0));
+        if(s < 3.0) return sRGBToLinear(mix(c2, c3, s - 2.0));
+        if(s < 4.0) return sRGBToLinear(mix(c3, c4, s - 3.0));
+        return sRGBToLinear(mix(c4, c5, s - 4.0));
+      }
+
+      vec3 jetLinear(float t) {
+        return multiStop5(t, vec3(0,0,1), vec3(0,1,1), vec3(1,1,0), vec3(1,0,0), vec3(0.196,0,0));
+      }
+      vec3 grayscaleLinear(float t) {
+        float v = 1.0 - t;
+        return sRGBToLinear(vec3(v));
+      }
+      vec3 inverseGrayscaleLinear(float t) {
+        return sRGBToLinear(vec3(t));
+      }
+      vec3 warmLinear(float t) {
+        return multiStop5(t, vec3(1,.957,.502), vec3(1,.784,.216), vec3(1,.471,0), vec3(.784,.157,0), vec3(.392,0,0));
+      }
+      vec3 coldLinear(float t) {
+        return multiStop5(t, vec3(.784,.902,1), vec3(.392,.588,1), vec3(0,.314,.863), vec3(0,.784,1), vec3(0,.157,.471));
+      }
+      vec3 biomesLinear(float t) {
+        return multiStop6(t, vec3(0,.157,.706), vec3(0,.471,.784), vec3(.235,.706,.314), vec3(.392,.784,.235), vec3(.706,.863,.549), vec3(1,1,1));
+      }
+      vec3 quantizedLinear(float t) {
+        int idx = int(floor(t * 6.0));
+        if(idx >= 6) idx = 5;
+        if(idx == 0) return sRGBToLinear(vec3(1,0,0));
+        if(idx == 1) return sRGBToLinear(vec3(1,1,0));
+        if(idx == 2) return sRGBToLinear(vec3(0,1,0));
+        if(idx == 3) return sRGBToLinear(vec3(0,1,1));
+        if(idx == 4) return sRGBToLinear(vec3(0,0,1));
+        return sRGBToLinear(vec3(1,0,1));
+      }
+      vec3 hueLinearMap(float t) {
+        float h = t * 6.0;
+        int sector = int(floor(h));
+        float f = h - float(sector);
+        int s = sector - (sector / 6) * 6;
+        if(s == 0) return sRGBToLinear(vec3(1, f, 0));
+        if(s == 1) return sRGBToLinear(vec3(1.0 - f, 1, 0));
+        if(s == 2) return sRGBToLinear(vec3(0, 1, f));
+        if(s == 3) return sRGBToLinear(vec3(0, 1.0 - f, 1));
+        if(s == 4) return sRGBToLinear(vec3(f, 0, 1));
+        return sRGBToLinear(vec3(1, 0, 1.0 - f));
+      }
+
       void main() {
         vec4 color = texture2D(map, vUv);
         if(colorMode == COLOR_MODE_RGBA) {
@@ -851,6 +918,22 @@ function createMaterial(texture: THREE.DataTexture, topic: string): GridShaderMa
               gl_FragColor = vec4(turboLinear(normalizedColorValue), colorMapOpacity);
             } else if(colorMap == COLOR_MAP_RAINBOW) {
               gl_FragColor = vec4(rainbowLinear(normalizedColorValue), colorMapOpacity);
+            } else if(colorMap == COLOR_MAP_JET) {
+              gl_FragColor = vec4(jetLinear(normalizedColorValue), colorMapOpacity);
+            } else if(colorMap == COLOR_MAP_GRAYSCALE) {
+              gl_FragColor = vec4(grayscaleLinear(normalizedColorValue), colorMapOpacity);
+            } else if(colorMap == COLOR_MAP_INVERSEGRAYSCALE) {
+              gl_FragColor = vec4(inverseGrayscaleLinear(normalizedColorValue), colorMapOpacity);
+            } else if(colorMap == COLOR_MAP_WARM) {
+              gl_FragColor = vec4(warmLinear(normalizedColorValue), colorMapOpacity);
+            } else if(colorMap == COLOR_MAP_COLD) {
+              gl_FragColor = vec4(coldLinear(normalizedColorValue), colorMapOpacity);
+            } else if(colorMap == COLOR_MAP_BIOMES) {
+              gl_FragColor = vec4(biomesLinear(normalizedColorValue), colorMapOpacity);
+            } else if(colorMap == COLOR_MAP_QUANTIZED) {
+              gl_FragColor = vec4(quantizedLinear(normalizedColorValue), colorMapOpacity);
+            } else if(colorMap == COLOR_MAP_HUE) {
+              gl_FragColor = vec4(hueLinearMap(normalizedColorValue), colorMapOpacity);
             }
           }
         }

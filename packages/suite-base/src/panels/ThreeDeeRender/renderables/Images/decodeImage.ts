@@ -164,6 +164,7 @@ export const IMAGE_DEFAULT_COLOR_MODE_SETTINGS: Required<
   gradient: ["#000000", "#ffffff"],
   colorMap: "turbo",
   explicitAlpha: 0,
+  histogramEqualization: false,
 };
 const MIN_MAX_16_BIT = { minValue: 0, maxValue: 65535 };
 
@@ -240,11 +241,20 @@ export function decodeRawImage(
         min,
         max,
       );
+
+      // Build histogram equalization LUT if enabled
+      let histEqLut: Float32Array | undefined;
+      if (settings.histogramEqualization) {
+        histEqLut = buildHistogramEqualizationLut(rawData, width, height, step, is_bigendian);
+      }
+
       decodeMono16(rawData, width, height, step, is_bigendian, output, {
         minValue: options.minValue,
         maxValue: options.maxValue,
         colorConverter: (value: number) => {
-          converter(tempColor, value);
+          // Remap value through histogram equalization LUT before colormap
+          const mappedValue = histEqLut != undefined ? (histEqLut[value] ?? value) : value;
+          converter(tempColor, mappedValue);
           return tempColor;
         },
       });
@@ -253,6 +263,57 @@ export function decodeRawImage(
     default:
       throw new Error(`Unsupported encoding ${encoding}`);
   }
+}
+
+/**
+ * Builds a histogram equalization lookup table for 16-bit depth data.
+ * Maps each possible 16-bit value to an equalized value in [0, 65535].
+ */
+function buildHistogramEqualizationLut(
+  rawData: Uint8Array,
+  width: number,
+  height: number,
+  step: number,
+  // eslint-disable-next-line @lichtblick/no-boolean-parameters
+  is_bigendian: boolean,
+): Float32Array {
+  const HIST_SIZE = 65536;
+  const histogram = new Uint32Array(HIST_SIZE);
+  const view = new DataView(rawData.buffer, rawData.byteOffset, rawData.byteLength);
+
+  // Build histogram of raw 16-bit values (skip zero / invalid pixels)
+  let nonZeroCount = 0;
+  for (let row = 0; row < height; row++) {
+    const rowStart = row * step;
+    for (let col = 0; col < width; col++) {
+      const val = view.getUint16(rowStart + col * 2, !is_bigendian);
+      if (val > 0) {
+        histogram[val]!++;
+        nonZeroCount++;
+      }
+    }
+  }
+
+  // Build cumulative distribution function. Zero is excluded from the histogram above, so
+  // histogram[0] and cdf[0] are always 0 and accumulation starts at 1.
+  const cdf = new Uint32Array(HIST_SIZE);
+  for (let i = 1; i < HIST_SIZE; i++) {
+    cdf[i] = cdf[i - 1]! + histogram[i]!;
+  }
+
+  // Build equalization LUT: maps raw 16-bit value to equalized value in [0, 65535]
+  const lut = new Float32Array(HIST_SIZE);
+  if (nonZeroCount > 0) {
+    for (let i = 0; i < HIST_SIZE; i++) {
+      if (i === 0) {
+        lut[i] = 0; // keep zero as zero (invalid/no-data)
+      } else {
+        lut[i] = (cdf[i]! / nonZeroCount) * 65535;
+      }
+    }
+  }
+
+  return lut;
 }
 
 // Performance sensitive, skip the extra await when returning a blank image

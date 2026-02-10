@@ -114,6 +114,10 @@ export type ImageModeConfig = Partial<ColorModeSettings> & {
   minValue?: number;
   /** Maximum (white) value for single-channel images */
   maxValue?: number;
+  /** Enable histogram equalization for depth/mono16 images */
+  histogramEqualization?: boolean;
+  /** Sync zoom/pan with other Image panels */
+  syncCamera?: boolean;
 };
 
 export type RendererConfig = {

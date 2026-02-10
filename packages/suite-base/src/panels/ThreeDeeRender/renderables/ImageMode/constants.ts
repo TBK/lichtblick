@@ -96,6 +96,8 @@ export const DEFAULT_IMAGE_CONFIG = {
   brightness: INITIAL_BRIGHTNESS,
   contrast: INITIAL_CONTRAST,
   ...IMAGE_DEFAULT_COLOR_MODE_SETTINGS,
+  histogramEqualization: false,
+  syncCamera: false,
 };
 
 export const VERTEX_SHADER = `

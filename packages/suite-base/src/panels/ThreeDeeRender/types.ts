@@ -23,6 +23,11 @@ export type Shared3DPanelState = {
   followTf: undefined | string;
 };
 
+export type SharedImagePanelState = {
+  panOffset: { x: number; y: number };
+  userZoom: number;
+};
+
 export type ThreeDeeRenderProps = {
   context: BuiltinPanelExtensionContext;
   interfaceMode: InterfaceMode;

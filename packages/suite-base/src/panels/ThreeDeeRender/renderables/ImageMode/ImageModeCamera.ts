@@ -87,6 +87,17 @@ export class ImageModeCamera extends THREE.PerspectiveCamera {
     this.resetModifications();
   }
 
+  public getUserZoom(): number {
+    return this.#userZoom;
+  }
+
+  /** Set zoom and pan atomically (used for syncing between panels) */
+  public setZoomAndPan(zoom: number, panOffset: { x: number; y: number }): void {
+    this.#userZoom = THREE.MathUtils.clamp(zoom, MIN_USER_ZOOM, MAX_USER_ZOOM);
+    this.#panOffset.set(panOffset.x, panOffset.y);
+    this.#updateProjection();
+  }
+
   public updateZoomFromWheel(ratio: number, cursorCoords: THREE.Vector2): void {
     const newZoom = THREE.MathUtils.clamp(this.#userZoom * ratio, MIN_USER_ZOOM, MAX_USER_ZOOM);
     const finalRatio = newZoom / this.#userZoom;

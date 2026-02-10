@@ -28,10 +28,21 @@ export interface ColorModeSettings {
   flatColor: string;
   colorField?: string;
   gradient: [string, string];
-  colorMap: "turbo" | "rainbow";
+  colorMap:
+    | "turbo"
+    | "rainbow"
+    | "jet"
+    | "grayscale"
+    | "inverseGrayscale"
+    | "warm"
+    | "cold"
+    | "biomes"
+    | "quantized"
+    | "hue";
   explicitAlpha: number;
   minValue?: number;
   maxValue?: number;
+  histogramEqualization?: boolean;
 }
 
 export function getColorConverter<
@@ -74,6 +85,54 @@ export function getColorConverter<
           return (output: ColorRGBA, colorValue: number) => {
             const frac = Math.max(0, Math.min((colorValue - minValue) / valueDelta, 1));
             rainbowLinear(output, frac);
+            output.a = settings.explicitAlpha;
+          };
+        case "jet":
+          return (output: ColorRGBA, colorValue: number) => {
+            const frac = Math.max(0, Math.min((colorValue - minValue) / valueDelta, 1));
+            multiStopCached(output, frac, getJetLookup);
+            output.a = settings.explicitAlpha;
+          };
+        case "grayscale":
+          return (output: ColorRGBA, colorValue: number) => {
+            const frac = Math.max(0, Math.min((colorValue - minValue) / valueDelta, 1));
+            multiStopCached(output, frac, getGrayscaleLookup);
+            output.a = settings.explicitAlpha;
+          };
+        case "inverseGrayscale":
+          return (output: ColorRGBA, colorValue: number) => {
+            const frac = Math.max(0, Math.min((colorValue - minValue) / valueDelta, 1));
+            multiStopCached(output, frac, getInverseGrayscaleLookup);
+            output.a = settings.explicitAlpha;
+          };
+        case "warm":
+          return (output: ColorRGBA, colorValue: number) => {
+            const frac = Math.max(0, Math.min((colorValue - minValue) / valueDelta, 1));
+            multiStopCached(output, frac, getWarmLookup);
+            output.a = settings.explicitAlpha;
+          };
+        case "cold":
+          return (output: ColorRGBA, colorValue: number) => {
+            const frac = Math.max(0, Math.min((colorValue - minValue) / valueDelta, 1));
+            multiStopCached(output, frac, getColdLookup);
+            output.a = settings.explicitAlpha;
+          };
+        case "biomes":
+          return (output: ColorRGBA, colorValue: number) => {
+            const frac = Math.max(0, Math.min((colorValue - minValue) / valueDelta, 1));
+            multiStopCached(output, frac, getBiomesLookup);
+            output.a = settings.explicitAlpha;
+          };
+        case "quantized":
+          return (output: ColorRGBA, colorValue: number) => {
+            const frac = Math.max(0, Math.min((colorValue - minValue) / valueDelta, 1));
+            quantizedLinearCached(output, frac);
+            output.a = settings.explicitAlpha;
+          };
+        case "hue":
+          return (output: ColorRGBA, colorValue: number) => {
+            const frac = Math.max(0, Math.min((colorValue - minValue) / valueDelta, 1));
+            hueLinearCached(output, frac);
             output.a = settings.explicitAlpha;
           };
       }
@@ -182,6 +241,209 @@ function turboLinearCached(output: ColorRGBA, pct: number): void {
   output.b = TurboLookup[offset + 2]!;
   output.a = 1;
 }
+
+// ---------------------------------------------------------------------------
+// Multi-stop colormaps
+// Each is defined as an array of sRGB color stops, linearly interpolated.
+// ---------------------------------------------------------------------------
+
+type ColorStop = readonly [number, number, number]; // sRGB 0-255
+
+/** Linearly interpolate between color stops and convert to linear RGB */
+function multiStopLinear(output: ColorRGBA, pct: number, stops: readonly ColorStop[]): void {
+  const scaled = clamp(pct, 0, 1) * (stops.length - 1);
+  const i = Math.min(Math.floor(scaled), stops.length - 2);
+  const f = scaled - i;
+  const a = stops[i]!;
+  const b = stops[i + 1]!;
+  output.r = SRGBToLinear((a[0] + (b[0] - a[0]) * f) / 255);
+  output.g = SRGBToLinear((a[1] + (b[1] - a[1]) * f) / 255);
+  output.b = SRGBToLinear((a[2] + (b[2] - a[2]) * f) / 255);
+  output.a = 1;
+}
+
+/** Build a 65535-entry cached LUT from a multi-stop colormap function */
+function buildMultiStopLookup(stops: readonly ColorStop[]): Float32Array {
+  const lut = new Float32Array(TURBO_LOOKUP_SIZE * 3);
+  const tmp = { r: 0, g: 0, b: 0, a: 0 };
+  for (let i = 0; i < TURBO_LOOKUP_SIZE; i++) {
+    multiStopLinear(tmp, i / (TURBO_LOOKUP_SIZE - 1), stops);
+    const offset = i * 3;
+    lut[offset + 0] = tmp.r;
+    lut[offset + 1] = tmp.g;
+    lut[offset + 2] = tmp.b;
+  }
+  return lut;
+}
+
+/** Read from a cached LUT */
+function multiStopCached(output: ColorRGBA, pct: number, getLookup: () => Float32Array): void {
+  const lut = getLookup();
+  const offset = Math.trunc(clamp(pct, 0, 1) * (TURBO_LOOKUP_SIZE - 1)) * 3;
+  output.r = lut[offset + 0]!;
+  output.g = lut[offset + 1]!;
+  output.b = lut[offset + 2]!;
+  output.a = 1;
+}
+
+// -- Jet: Blue -> Cyan -> Yellow -> Red -> DarkRed
+const JET_STOPS: readonly ColorStop[] = [
+  [0, 0, 255],
+  [0, 255, 255],
+  [255, 255, 0],
+  [255, 0, 0],
+  [50, 0, 0],
+];
+let jetLookup: Float32Array | undefined;
+function getJetLookup(): Float32Array {
+  return (jetLookup ??= buildMultiStopLookup(JET_STOPS));
+}
+
+// -- Grayscale: White -> Black (near = bright)
+const GRAYSCALE_STOPS: readonly ColorStop[] = [
+  [255, 255, 255],
+  [0, 0, 0],
+];
+let grayscaleLookup: Float32Array | undefined;
+function getGrayscaleLookup(): Float32Array {
+  return (grayscaleLookup ??= buildMultiStopLookup(GRAYSCALE_STOPS));
+}
+
+// -- Inverse Grayscale: Black -> White
+const INVERSE_GRAYSCALE_STOPS: readonly ColorStop[] = [
+  [0, 0, 0],
+  [255, 255, 255],
+];
+let inverseGrayscaleLookup: Float32Array | undefined;
+function getInverseGrayscaleLookup(): Float32Array {
+  return (inverseGrayscaleLookup ??= buildMultiStopLookup(INVERSE_GRAYSCALE_STOPS));
+}
+
+// -- Warm: Light yellow -> Orange -> Red -> Dark red
+const WARM_STOPS: readonly ColorStop[] = [
+  [255, 255, 128],
+  [255, 200, 55],
+  [255, 120, 0],
+  [200, 40, 0],
+  [100, 0, 0],
+];
+let warmLookup: Float32Array | undefined;
+function getWarmLookup(): Float32Array {
+  return (warmLookup ??= buildMultiStopLookup(WARM_STOPS));
+}
+
+// -- Cold: Light blue -> Deep blue -> Cyan -> Dark blue
+const COLD_STOPS: readonly ColorStop[] = [
+  [200, 230, 255],
+  [100, 150, 255],
+  [0, 80, 220],
+  [0, 200, 255],
+  [0, 40, 120],
+];
+let coldLookup: Float32Array | undefined;
+function getColdLookup(): Float32Array {
+  return (coldLookup ??= buildMultiStopLookup(COLD_STOPS));
+}
+
+// -- Biomes: Blue (water) -> Green (land) -> White (mountains)
+const BIOMES_STOPS: readonly ColorStop[] = [
+  [0, 40, 180],
+  [0, 120, 200],
+  [60, 180, 80],
+  [100, 200, 60],
+  [180, 220, 140],
+  [255, 255, 255],
+];
+let biomesLookup: Float32Array | undefined;
+function getBiomesLookup(): Float32Array {
+  return (biomesLookup ??= buildMultiStopLookup(BIOMES_STOPS));
+}
+
+// -- Quantized: 6 discrete color levels (stepped, not interpolated)
+const QUANTIZED_COLORS: readonly ColorStop[] = [
+  [255, 0, 0],
+  [255, 255, 0],
+  [0, 255, 0],
+  [0, 255, 255],
+  [0, 0, 255],
+  [255, 0, 255],
+];
+let quantizedLookup: Float32Array | undefined;
+function quantizedLinearCached(output: ColorRGBA, pct: number): void {
+  if (!quantizedLookup) {
+    quantizedLookup = new Float32Array(TURBO_LOOKUP_SIZE * 3);
+    const numLevels = QUANTIZED_COLORS.length;
+    for (let i = 0; i < TURBO_LOOKUP_SIZE; i++) {
+      const idx = Math.min(Math.floor((i / (TURBO_LOOKUP_SIZE - 1)) * numLevels), numLevels - 1);
+      const c = QUANTIZED_COLORS[idx]!;
+      const offset = i * 3;
+      quantizedLookup[offset + 0] = SRGBToLinear(c[0] / 255);
+      quantizedLookup[offset + 1] = SRGBToLinear(c[1] / 255);
+      quantizedLookup[offset + 2] = SRGBToLinear(c[2] / 255);
+    }
+  }
+  const offset = Math.trunc(clamp(pct, 0, 1) * (TURBO_LOOKUP_SIZE - 1)) * 3;
+  output.r = quantizedLookup[offset + 0]!;
+  output.g = quantizedLookup[offset + 1]!;
+  output.b = quantizedLookup[offset + 2]!;
+  output.a = 1;
+}
+
+// -- Hue: Full HSV hue spectrum (S=1, V=1)
+let hueLookup: Float32Array | undefined;
+function hueLinearCached(output: ColorRGBA, pct: number): void {
+  if (!hueLookup) {
+    hueLookup = new Float32Array(TURBO_LOOKUP_SIZE * 3);
+    for (let i = 0; i < TURBO_LOOKUP_SIZE; i++) {
+      const h = (i / (TURBO_LOOKUP_SIZE - 1)) * 6; // HSV hue 0-6
+      const sector = Math.floor(h);
+      const f = h - sector;
+      let r: number, g: number, b: number;
+      switch (sector % 6) {
+        case 0:
+          r = 1;
+          g = f;
+          b = 0;
+          break;
+        case 1:
+          r = 1 - f;
+          g = 1;
+          b = 0;
+          break;
+        case 2:
+          r = 0;
+          g = 1;
+          b = f;
+          break;
+        case 3:
+          r = 0;
+          g = 1 - f;
+          b = 1;
+          break;
+        case 4:
+          r = f;
+          g = 0;
+          b = 1;
+          break;
+        default:
+          r = 1;
+          g = 0;
+          b = 1 - f;
+          break;
+      }
+      const offset = i * 3;
+      hueLookup[offset + 0] = SRGBToLinear(r);
+      hueLookup[offset + 1] = SRGBToLinear(g);
+      hueLookup[offset + 2] = SRGBToLinear(b);
+    }
+  }
+  const offset = Math.trunc(clamp(pct, 0, 1) * (TURBO_LOOKUP_SIZE - 1)) * 3;
+  output.r = hueLookup[offset + 0]!;
+  output.g = hueLookup[offset + 1]!;
+  output.b = hueLookup[offset + 2]!;
+  output.a = 1;
+}
+
 export const RGBA_PACKED_FIELDS = new Set<string>(["rgb", "rgba"]);
 export const INTENSITY_FIELDS = new Set<string>(["intensity", "i"]);
 
@@ -367,6 +629,14 @@ export function colorModeSettingsFields<Settings extends ColorModeSettings & Bas
           options: [
             { label: "Turbo", value: "turbo" },
             { label: "Rainbow", value: "rainbow" },
+            { label: "Jet", value: "jet" },
+            { label: "Grayscale", value: "grayscale" },
+            { label: "Inverse Grayscale", value: "inverseGrayscale" },
+            { label: "Warm", value: "warm" },
+            { label: "Cold", value: "cold" },
+            { label: "Biomes", value: "biomes" },
+            { label: "Quantized", value: "quantized" },
+            { label: "Hue", value: "hue" },
           ],
           value: colorMap,
         };

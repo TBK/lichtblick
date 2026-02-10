@@ -96,6 +96,7 @@ import {
   CameraInfo,
 } from "../../ros";
 import { topicIsConvertibleToSchema } from "../../topicIsConvertibleToSchema";
+import { SharedImagePanelState } from "../../types";
 import { ICameraHandler } from "../ICameraHandler";
 import { getTopicMatchPrefix, sortPrefixMatchesToFront } from "../Images/topicPrefixMatching";
 import { colorModeSettingsFields } from "../colorMode";
@@ -432,6 +433,7 @@ export class ImageMode
       rotation,
       brightness,
       contrast,
+      histogramEqualization,
     } = settings;
 
     const imageTopics = filterMap(this.renderer.topics ?? [], (topic) => {
@@ -525,6 +527,11 @@ export class ImageMode
       label: "Sync annotations",
       value: synchronize,
     };
+    fields.syncCamera = {
+      input: "boolean",
+      label: "Sync view",
+      value: settings.syncCamera,
+    };
     fields.flipHorizontal = {
       input: "boolean",
       label: "Flip horizontal",
@@ -586,6 +593,12 @@ export class ImageMode
       });
 
       Object.assign(fields, colorModeFields);
+
+      fields.histogramEqualization = {
+        input: "boolean",
+        label: "Histogram Equalization",
+        value: histogramEqualization,
+      };
     }
 
     return [
@@ -664,6 +677,7 @@ export class ImageMode
       maxValue: config.maxValue,
       brightness: config.brightness,
       contrast: config.contrast,
+      histogramEqualization: config.histogramEqualization,
     });
     if (config.synchronize !== prevImageModeConfig.synchronize) {
       this.hud.removeGroup(IMAGE_MODE_HUD_GROUP_ID);
@@ -818,6 +832,7 @@ export class ImageMode
       colorMap: config.colorMap,
       minValue: config.minValue,
       maxValue: config.maxValue,
+      histogramEqualization: config.histogramEqualization,
       // planarProjectionFactor must be 1 to avoid imprecise projection due to small number of grid subdivisions
       planarProjectionFactor: 1,
     };
@@ -992,6 +1007,24 @@ export class ImageMode
 
   public getCameraState(): undefined {
     return undefined;
+  }
+
+  /** Get the current zoom/pan state for sharing with other Image panels */
+  public getSyncedCameraState(): SharedImagePanelState {
+    const panOffset = new THREE.Vector2();
+    this.#camera.getPanOffset(panOffset);
+    return {
+      panOffset: { x: panOffset.x, y: panOffset.y },
+      userZoom: this.#camera.getUserZoom(),
+    };
+  }
+
+  /** Apply zoom/pan state from another Image panel (does not emit cameraMove) */
+  public applySyncedCameraState(state: SharedImagePanelState): void {
+    this.#camera.setZoomAndPan(state.userZoom, state.panOffset);
+    this.#hasModifiedView =
+      state.userZoom !== 1 || state.panOffset.x !== 0 || state.panOffset.y !== 0;
+    this.renderer.queueAnimationFrame();
   }
 
   #handleErrorChange = (): void => {

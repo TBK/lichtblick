@@ -462,3 +462,97 @@ describe("emptyVideoFrame", () => {
     expect(bitmap.height).toEqual(100);
   });
 });
+
+describe("decodeRawImage 16-bit depth", () => {
+  /** Build a single-row mono16 image from raw 16-bit depth values. */
+  function createMono16Image(values: number[], encoding = "mono16"): RosImage {
+    const samples = new Uint16Array(values);
+    return {
+      encoding,
+      width: values.length,
+      height: 1,
+      step: values.length * 2,
+      data: new Uint8Array(samples.buffer),
+      header: { frame_id: "", stamp: { sec: 0, nsec: 0 }, seq: undefined },
+      is_bigendian: false,
+    };
+  }
+
+  function decode(
+    image: RosImage,
+    { histogramEqualization }: { histogramEqualization: boolean },
+  ): Uint8ClampedArray {
+    const output = new Uint8ClampedArray(image.width * image.height * 4);
+    decodeRawImage(
+      image,
+      { colorMode: "colormap", colorMap: "inverseGrayscale", histogramEqualization },
+      output,
+    );
+    return output;
+  }
+
+  /** Red channel of each pixel; inverseGrayscale is achromatic so one channel is enough. */
+  function redChannels(output: Uint8ClampedArray): number[] {
+    return Array.from({ length: output.length / 4 }, (_, i) => output[i * 4]!);
+  }
+
+  it.each(["mono16", "16UC1"])("should decode supported encoding: %s", (encoding) => {
+    // GIVEN a 16-bit depth image
+    // WHEN it is decoded
+    // THEN every pixel is written with a fully opaque alpha
+    const output = decode(createMono16Image([0, 1000, 32768, 65535], encoding), {
+      histogramEqualization: false,
+    });
+
+    expect(output).toHaveLength(16);
+    expect([output[3], output[7], output[11], output[15]]).toEqual([255, 255, 255, 255]);
+  });
+
+  it("should leave a tightly clustered depth range nearly flat without equalization", () => {
+    // GIVEN three depth values clustered closely together plus one far outlier
+    // WHEN decoded without histogram equalization
+    // THEN the clustered values are mapped to nearly the same shade
+    const [a, b, c] = redChannels(
+      decode(createMono16Image([1000, 1001, 1002, 60000]), { histogramEqualization: false }),
+    );
+
+    expect(Math.abs(b! - a!)).toBeLessThanOrEqual(1);
+    expect(Math.abs(c! - b!)).toBeLessThanOrEqual(1);
+  });
+
+  it("should spread a tightly clustered depth range apart with equalization", () => {
+    // GIVEN the same clustered depth values
+    // WHEN decoded with histogram equalization enabled
+    // THEN the clustered values are spread into clearly distinguishable shades
+    const channels = redChannels(
+      decode(createMono16Image([1000, 1001, 1002, 60000]), { histogramEqualization: true }),
+    );
+
+    for (let i = 1; i < channels.length; i++) {
+      expect(channels[i]!).toBeGreaterThan(channels[i - 1]! + 5);
+    }
+  });
+
+  it("should keep zero depth pixels unchanged when equalizing", () => {
+    // GIVEN a depth image containing zero (invalid / no-data) pixels
+    // WHEN decoded with and without histogram equalization
+    // THEN the zero pixels keep the same color either way
+    const image = createMono16Image([0, 5000, 0, 60000]);
+    const equalized = redChannels(decode(image, { histogramEqualization: true }));
+    const plain = redChannels(decode(image, { histogramEqualization: false }));
+
+    expect(equalized[0]).toBe(plain[0]);
+    expect(equalized[2]).toBe(plain[2]);
+  });
+
+  it("should not produce invalid channel values for an all-zero depth image", () => {
+    // GIVEN a depth image with no valid pixels at all, so the histogram is empty
+    // WHEN decoded with histogram equalization enabled
+    // THEN decoding completes and every channel is a finite byte rather than NaN
+    const output = decode(createMono16Image([0, 0, 0, 0]), { histogramEqualization: true });
+
+    for (const channel of output) {
+      expect(Number.isFinite(channel)).toBe(true);
+    }
+  });
+});

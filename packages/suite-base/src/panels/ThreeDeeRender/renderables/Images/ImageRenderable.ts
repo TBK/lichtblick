@@ -271,7 +271,8 @@ export class ImageRenderable extends Renderable<ImageUserData> {
       !_.isEqual(prevSettings.gradient, newSettings.gradient) ||
       prevSettings.colorMap !== newSettings.colorMap ||
       prevSettings.minValue !== newSettings.minValue ||
-      prevSettings.maxValue !== newSettings.maxValue
+      prevSettings.maxValue !== newSettings.maxValue ||
+      prevSettings.histogramEqualization !== newSettings.histogramEqualization
     ) {
       this.userData.settings = newSettings;
       // Decode the current image again, which takes into account the new options

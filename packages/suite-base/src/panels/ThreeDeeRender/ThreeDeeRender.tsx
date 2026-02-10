@@ -60,9 +60,10 @@ import {
   makePoseMessage,
 } from "./publish";
 import type { LayerSettingsTransform } from "./renderables/FrameAxes";
+import { ImageMode } from "./renderables/ImageMode/ImageMode";
 import { PublishClickEventMap } from "./renderables/PublishClickTool";
 import { DEFAULT_PUBLISH_SETTINGS } from "./renderables/PublishSettings";
-import { Shared3DPanelState, ThreeDeeRenderProps } from "./types";
+import { Shared3DPanelState, SharedImagePanelState, ThreeDeeRenderProps } from "./types";
 
 /**
  * Schemas that carry coordinate frame transforms. Topics with one of these schemas generally
@@ -215,7 +216,9 @@ export function ThreeDeeRender(props: Readonly<ThreeDeeRenderProps>): React.JSX.
   >();
   const [currentTime, setCurrentTime] = useState<Time | undefined>();
   const [didSeek, setDidSeek] = useState<boolean>(false);
-  const [sharedPanelState, setSharedPanelState] = useState<undefined | Shared3DPanelState>();
+  const [sharedPanelState, setSharedPanelState] = useState<
+    undefined | Shared3DPanelState | SharedImagePanelState
+  >();
   const [allFrames, setAllFrames] = useState<readonly MessageEvent[] | undefined>(undefined);
   const [isLoadingTransforms, setIsLoadingTransforms] = useState<boolean>(false);
   const [loadedTransformCount, setLoadedTransformCount] = useState<number>(0);
@@ -261,11 +264,29 @@ export function ThreeDeeRender(props: Readonly<ThreeDeeRenderProps>): React.JSX.
             followTf: renderer.followFrameId,
           });
         }
+
+        // Image mode: sync zoom/pan with other Image panels
+        if (interfaceMode === "image" && config.imageMode.syncCamera === true) {
+          const imageMode = renderer.sceneExtensions.get("foxglove.ImageMode") as
+            | ImageMode
+            | undefined;
+          if (imageMode) {
+            context.setSharedPanelState(imageMode.getSyncedCameraState());
+          }
+        }
       }
     };
     renderer?.addListener("cameraMove", listener);
     return () => void renderer?.removeListener("cameraMove", listener);
-  }, [config.scene.syncCamera, config.followMode, context, renderer?.followFrameId, renderer]);
+  }, [
+    config.scene.syncCamera,
+    config.imageMode.syncCamera,
+    config.followMode,
+    context,
+    interfaceMode,
+    renderer?.followFrameId,
+    renderer,
+  ]);
 
   // Handle user changes in the settings sidebar
   const actionHandler = useCallback(
@@ -586,7 +607,9 @@ export function ThreeDeeRender(props: Readonly<ThreeDeeRenderProps>): React.JSX.
       // the current frame, topics may not have changed
       setTopics(renderState.topics);
 
-      setSharedPanelState(renderState.sharedPanelState as Shared3DPanelState);
+      setSharedPanelState(
+        renderState.sharedPanelState as Shared3DPanelState | SharedImagePanelState,
+      );
 
       // Watch for any changes in the map of observed parameters
       setParameters(renderState.parameters);
@@ -759,9 +782,14 @@ export function ThreeDeeRender(props: Readonly<ThreeDeeRenderProps>): React.JSX.
     }
   }, [cameraState, renderer]);
 
-  // Sync camera with shared state, if enabled.
+  // Sync camera with shared state, if enabled (3D mode).
   useEffect(() => {
     if (!renderer || sharedPanelState == undefined || config.scene.syncCamera !== true) {
+      return;
+    }
+
+    // Type guard: 3D shared state has cameraState
+    if (!("cameraState" in sharedPanelState)) {
       return;
     }
 
@@ -790,6 +818,29 @@ export function ThreeDeeRender(props: Readonly<ThreeDeeRenderProps>): React.JSX.
     renderer?.followFrameId,
     sharedPanelState,
   ]);
+
+  // Sync zoom/pan with shared state for Image panels, if enabled.
+  useEffect(() => {
+    if (
+      !renderer ||
+      sharedPanelState == undefined ||
+      interfaceMode !== "image" ||
+      config.imageMode.syncCamera !== true
+    ) {
+      return;
+    }
+
+    // Type guard: Image shared state has userZoom
+    if (!("userZoom" in sharedPanelState)) {
+      return;
+    }
+
+    const imageMode = renderer.sceneExtensions.get("foxglove.ImageMode") as ImageMode | undefined;
+    if (imageMode) {
+      imageMode.applySyncedCameraState(sharedPanelState);
+      renderRef.current.needsRender = true;
+    }
+  }, [config.imageMode.syncCamera, interfaceMode, renderer, sharedPanelState]);
 
   // Render a new frame if requested
   useEffect(() => {
